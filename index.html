@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Habit Tracker</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Rend l'app installable sur Android (icône, nom, mode plein écran). -->
+  <link rel="manifest" href="manifest.json">
+  <!-- Couleur de la barre système/splash screen à l'ouverture, alignée sur
+       le thème sombre de l'app. -->
+  <meta name="theme-color" content="#121212">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+</head>
+<body>
+  <!-- Bandeau de rappel d'export hebdomadaire : caché par défaut (attribut
+       "hidden"), affiché/masqué par renderExportReminder() dans app.js
+       selon l'âge du dernier export (voir shouldShowExportReminder). -->
+  <div id="export-reminder" class="export-reminder" hidden></div>
+
+  <!-- Zone du jour courant : le titre est remplacé par la date du jour
+       (ex. "Lundi 6 octobre 2026") par formatDateHeading() dans app.js.
+       Le texte ci-dessous n'est qu'un repli avant que app.js ne tourne. -->
+  <h1 id="today-heading">Aujourd'hui</h1>
+  <div id="today-habits"></div>
+
+  <!-- Zone "30 derniers jours" : remplie dynamiquement par
+       renderHistory() dans app.js (une grille de cases par habitude). -->
+  <h1>30 derniers jours</h1>
+  <div id="history"></div>
+
+  <!-- Export des données. JSON = sauvegarde brute complète (pour
+       restaurer plus tard). CSV = lecture humaine / tableur. Les
+       gestionnaires de clic sont branchés dans app.js (initExportButtons). -->
+  <h1>Export</h1>
+  <div class="export-actions">
+    <button id="export-json-btn">Exporter en JSON</button>
+    <button id="export-csv-btn">Exporter en CSV</button>
+  </div>
+
+  <!-- Tout le JS de l'app : modèle de données, règles des séries/gels,
+       et le rendu des deux zones ci-dessus. Script classique (pas de
+       module), volontairement, pour rester simple et sans étape de build. -->
+  <script src="app.js"></script>
+</body>
+</html>
