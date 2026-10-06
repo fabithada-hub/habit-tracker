@@ -189,12 +189,12 @@ h1 {
 /* --- Bande des 30 derniers jours (en bas de chaque carte) --- */
 
 /* 20 colonnes x 3 lignes = 60 jours (HISTORY_DAYS dans app.js), en largeur
-   fluide (1fr) : cases plus grandes qu'en 30 colonnes, plus faciles à
-   viser du doigt pour cocher un jour précis (voir toggleDoneDate). */
+   fluide (1fr) : cases encore plus grandes, plus faciles à viser du doigt
+   pour cocher un jour précis (voir toggleDoneDate). */
 .history-grid {
   display: grid;
-  grid-template-columns: repeat(20, 1fr);
-  gap: 2px;
+  grid-template-columns: repeat(15, 1fr);
+  gap: 3px;
 }
 
 .history-cell {

@@ -319,7 +319,7 @@ function freezeIcons(freezes) {
 }
 
 // Nombre de jours affichés dans la bande d'historique de chaque carte
-// (voir CLAUDE.md, section 2). Affichée sur 2 lignes pleine largeur de 30
+// (voir CLAUDE.md, section 2). Affichée sur 4 lignes pleine largeur de 15
 // cases chacune (voir .history-grid dans style.css).
 const HISTORY_DAYS = 60;
 
