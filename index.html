@@ -18,16 +18,18 @@
        selon l'âge du dernier export (voir shouldShowExportReminder). -->
   <div id="export-reminder" class="export-reminder" hidden></div>
 
-  <!-- Zone du jour courant : le titre est remplacé par la date du jour
-       (ex. "Lundi 6 octobre 2026") par formatDateHeading() dans app.js.
-       Le texte ci-dessous n'est qu'un repli avant que app.js ne tourne. -->
-  <h1 id="today-heading">Aujourd'hui</h1>
-  <div id="today-habits"></div>
+  <!-- En-tête fixe : logo de l'app (mêmes icônes que l'installation PWA)
+       + nom. Remplace l'ancien titre "date du jour", pour gagner de la
+       place à l'écran (voir renderHabitList() dans app.js). -->
+  <div class="app-header">
+    <img src="icons/icon-192.png" alt="" class="app-logo">
+    <h1 class="app-title">Habit Tracker</h1>
+  </div>
 
-  <!-- Zone "30 derniers jours" : remplie dynamiquement par
-       renderHistory() dans app.js (une grille de cases par habitude). -->
-  <h1>30 derniers jours</h1>
-  <div id="history"></div>
+  <!-- Liste des habitudes : une carte compacte par habitude (case à cocher
+       du jour + série/gels en haut, bande des 30 derniers jours en bas),
+       plus le bouton d'ajout. Remplie par renderHabitList() dans app.js. -->
+  <div id="habit-list"></div>
 
   <!-- Export des données. JSON = sauvegarde brute complète (pour
        restaurer plus tard). CSV = lecture humaine / tableur. Les

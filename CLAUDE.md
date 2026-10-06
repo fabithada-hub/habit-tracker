@@ -2,8 +2,9 @@
 
 ## 1. Projet
 
-PWA personnelle de suivi de 3 habitudes quotidiennes sur Android : cohérence
-cardiaque, étirements + gainage, lecture.
+PWA personnelle de suivi d'habitudes quotidiennes sur Android. Habitudes de
+départ : cohérence cardiaque, étirements + gainage, lecture — la liste est
+modifiable (ajout, réordonnancement).
 
 Le vrai but : que moi, Fabien (débutant en HTML/JS/Python), j'apprenne à
 construire des apps avec Claude Code. L'app est le prétexte, l'apprentissage est l'objectif.
@@ -15,7 +16,11 @@ Ne rien ajouter sans mon accord explicite.
 Dans le périmètre :
 - coche quotidienne : fait / pas fait
 - séries (streaks) avec gels
-- vue des 30 derniers jours, par habitude
+- vue des 60 derniers jours, par habitude
+- ajout d'une habitude, réordonnancement par glisser-déposer
+- retrait d'une habitude : disparaît de l'app, reste dans les exports
+  (archivage, pas suppression des données)
+- série record (meilleur streak historique), affichée par habitude
 - données uniquement locales
 - export JSON, puis CSV
 - rappel d'export hebdomadaire affiché dans l'app

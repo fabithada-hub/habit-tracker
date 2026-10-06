@@ -1,11 +1,12 @@
 // =========================================================================
 // Habit Tracker — logique de l'application
 //
-// Principe général : localStorage est la SEULE source de vérité, et elle ne
-// contient quasiment rien (juste les dates où chaque habitude a été faite).
-// Tout le reste (série, gels, statut par jour) est RECALCULÉ à chaque fois
-// par des fonctions pures, à partir de ces dates. Voir CLAUDE.md pour les
-// règles métier complètes (périmètre, règles des séries/gels).
+// Principe général : localStorage est la SEULE source de vérité. Elle
+// contient la liste des habitudes (id, label, dates où elles ont été
+// faites) et rien d'autre. Tout le reste (série, gels, statut par jour)
+// est RECALCULÉ à chaque fois par des fonctions pures, à partir de ces
+// dates. Voir CLAUDE.md pour les règles métier complètes (périmètre,
+// règles des séries/gels).
 // =========================================================================
 
 
@@ -14,31 +15,67 @@
 // Clé unique utilisée dans localStorage pour stocker tout l'état de l'app.
 const STORAGE_KEY = 'habitTrackerData';
 
-// Liste des 3 habitudes suivies. `id` = identifiant technique stable (utilisé
-// comme clé dans les données et ne doit jamais changer une fois des données
-// enregistrées), `label` = texte affiché à l'utilisateur.
-const HABITS = [
+// Habitudes de départ, utilisées uniquement pour créer les données la toute
+// première fois (ou migrer un ancien format, voir loadData). Une fois l'app
+// utilisée, la vraie liste des habitudes vit dans localStorage (data.habits)
+// et peut être modifiée par l'utilisateur (ajout, réordonnancement) : ces
+// constantes ne sont plus jamais relues après la première utilisation.
+const DEFAULT_HABITS = [
   { id: 'coherence', label: 'Cohérence cardiaque' },
   { id: 'etirements', label: 'Étirements + gainage' },
   { id: 'lecture', label: 'Lecture' },
 ];
 
 // Construit la structure de données par défaut (première utilisation de
-// l'app, ou localStorage vide/effacé). Chaque habitude démarre avec un
-// historique vide.
+// l'app, ou localStorage vide/effacé).
 function emptyData() {
-  const habits = {};
-  for (const h of HABITS) habits[h.id] = { doneDates: [] };
+  const habits = DEFAULT_HABITS.map((h) => ({ id: h.id, label: h.label, doneDates: [], archived: false }));
   return { habits, lastExportDate: null };
 }
 
+// Génère un identifiant technique unique pour une nouvelle habitude.
+// Basé sur l'horodatage : largement suffisant pour un usage personnel (pas
+// de création simultanée depuis deux appareils différents).
+function generateHabitId() {
+  return `habit-${Date.now()}`;
+}
+
 // Lit l'état complet depuis localStorage. Si rien n'existe encore, renvoie
-// une structure vide plutôt que null/undefined, pour que le reste du code
-// n'ait jamais à vérifier "est-ce que les données existent ?".
+// une structure vide. Gère aussi la migration depuis l'ancien format (où
+// data.habits était un objet {id: {doneDates}} à la place d'un tableau
+// ordonné) : indispensable pour ne pas perdre les données déjà enregistrées
+// quand ce changement de modèle a été introduit.
 function loadData() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return emptyData();
-  return JSON.parse(raw);
+
+  const data = JSON.parse(raw);
+
+  // Ancien format : data.habits est un objet, pas un tableau. On migre vers
+  // le nouveau format (tableau ordonné, avec label stocké sur chaque
+  // habitude) en réutilisant les libellés connus de DEFAULT_HABITS, puis on
+  // sauvegarde immédiatement pour ne migrer qu'une seule fois.
+  if (data.habits && !Array.isArray(data.habits)) {
+    const migrated = DEFAULT_HABITS
+      .filter((h) => data.habits[h.id])
+      .map((h) => ({ id: h.id, label: h.label, doneDates: data.habits[h.id].doneDates, archived: false }));
+    data.habits = migrated;
+    saveData(data);
+  }
+
+  // Habitudes créées avant l'ajout du retrait/archivage : pas encore de
+  // champ `archived`. On le complète à `false` (visible) par défaut, pour
+  // que toute la logique puisse supposer que ce champ existe toujours.
+  let needsSave = false;
+  for (const habit of data.habits) {
+    if (habit.archived === undefined) {
+      habit.archived = false;
+      needsSave = true;
+    }
+  }
+  if (needsSave) saveData(data);
+
+  return data;
 }
 
 // Écrit l'état complet dans localStorage (écrase tout ce qui existait).
@@ -102,14 +139,21 @@ function daysBetween(fromStr, toStr) {
 // computeHabitState() est une fonction PURE : mêmes entrées -> même sortie,
 // aucun effet de bord (pas de lecture/écriture de localStorage ici). Ça la
 // rend facile à tester à la main dans la console du navigateur, et facile à
-// faire évoluer sans risquer de casser le stockage.
+// faire évoluer sans risquer de casser le stockage. Elle ne connaît même
+// pas la notion d'"habitude" : elle prend juste des dates en entrée, ce qui
+// la rend valable pour n'importe quelle habitude, y compris celles créées
+// dynamiquement par l'utilisateur.
 //
 // Paramètres :
 //   doneDates : tableau de chaînes "AAAA-MM-JJ" où l'habitude a été faite
 //   today     : chaîne "AAAA-MM-JJ" représentant "aujourd'hui"
 //
-// Retour : { streak, freezes, statusByDate }
+// Retour : { streak, bestStreak, freezes, statusByDate }
 //   streak        : longueur de la série en cours (nombre de jours)
+//   bestStreak    : la plus longue série jamais atteinte (record), pour se
+//                   challenger dans le futur ; un jour gelé ne compte pas
+//                   dans le compteur, donc ne fait pas progresser le record
+//                   non plus (cohérent avec `streak`)
 //   freezes       : nombre de gels actuellement en stock (0 à 3)
 //   statusByDate  : objet { "AAAA-MM-JJ": 'done' | 'frozen' | 'missed' }
 //                   un jour sans entrée = avant le début du suivi (jamais
@@ -119,7 +163,7 @@ function computeHabitState(doneDates, today) {
 
   // Aucune donnée encore : rien à calculer.
   if (doneSet.size === 0) {
-    return { streak: 0, freezes: 0, statusByDate: {} };
+    return { streak: 0, bestStreak: 0, freezes: 0, statusByDate: {} };
   }
 
   // On part du premier jour où l'habitude a été faite, et on avance jour par
@@ -129,6 +173,7 @@ function computeHabitState(doneDates, today) {
   const sorted = [...doneSet].sort();
   let cursor = sorted[0];
   let streak = 0;
+  let bestStreak = 0;
   let freezes = 0;
   // prevWasMiss : le jour précédent était-il un échec (gelé ou non) ?
   // Sert à détecter "deux jours manqués consécutifs" (règle qui casse la
@@ -141,6 +186,7 @@ function computeHabitState(doneDates, today) {
       // Jour fait : la série avance, et on gagne un gel tous les 7 jours
       // (si le stock n'est pas déjà au maximum de 3).
       streak += 1;
+      if (streak > bestStreak) bestStreak = streak;
       if (streak % 7 === 0 && freezes < 3) freezes += 1;
       statusByDate[cursor] = 'done';
       prevWasMiss = false;
@@ -163,11 +209,11 @@ function computeHabitState(doneDates, today) {
     cursor = addDays(cursor, 1);
   }
 
-  return { streak, freezes, statusByDate };
+  return { streak, bestStreak, freezes, statusByDate };
 }
 
 
-// --- Actions ---------------------------------------------------------------
+// --- Actions sur les habitudes ---------------------------------------------
 
 // Coche ou décoche "aujourd'hui" pour une habitude donnée (bascule l'état).
 // Lit l'état, modifie le tableau de dates, réécrit immédiatement dans
@@ -176,16 +222,66 @@ function computeHabitState(doneDates, today) {
 function toggleDoneToday(habitId) {
   const data = loadData();
   const today = todayStr();
-  const dates = data.habits[habitId].doneDates;
-  const idx = dates.indexOf(today);
-  if (idx >= 0) dates.splice(idx, 1); // déjà cochée -> on décoche
-  else dates.push(today); // pas encore cochée -> on coche
+  const habit = data.habits.find((h) => h.id === habitId);
+  const idx = habit.doneDates.indexOf(today);
+  if (idx >= 0) habit.doneDates.splice(idx, 1); // déjà cochée -> on décoche
+  else habit.doneDates.push(today); // pas encore cochée -> on coche
   saveData(data);
-  return computeHabitState(dates, today);
+  return computeHabitState(habit.doneDates, today);
+}
+
+// Ajoute une nouvelle habitude à la fin de la liste, avec un historique
+// vide. Le nom est fourni tel quel (espaces superflus retirés) ; appelant
+// responsable de vérifier qu'il n'est pas vide (voir promptNewHabit).
+function addHabit(label) {
+  const data = loadData();
+  data.habits.push({ id: generateHabitId(), label: label.trim(), doneDates: [], archived: false });
+  saveData(data);
+}
+
+// Retire une habitude de l'affichage SANS supprimer ses données : on la
+// marque juste "archivée". Elle disparaît de l'app, mais son historique
+// complet reste dans data.habits, donc dans les exports JSON/CSV (voir
+// buildCsv, qui n'exclut jamais les habitudes archivées). Pas de bouton de
+// restauration pour l'instant : revenir en arrière demande d'éditer
+// localStorage à la main (voir CLAUDE.md, hors périmètre pour l'instant).
+function archiveHabit(habitId) {
+  const data = loadData();
+  const habit = data.habits.find((h) => h.id === habitId);
+  if (habit) habit.archived = true;
+  saveData(data);
+}
+
+// Déplace une habitude juste avant une autre dans la liste (réordonnancement
+// par glisser-déposer). On identifie les habitudes par leur id plutôt que
+// par position, car la liste affichée à l'écran (habitudes non archivées)
+// ne contient pas forcément tous les éléments de data.habits : raisonner en
+// index purs mélangerait les deux. beforeHabitId = null signifie "déposée
+// en toute fin de liste".
+function reorderHabit(habitId, beforeHabitId) {
+  const data = loadData();
+  const fromIndex = data.habits.findIndex((h) => h.id === habitId);
+  if (fromIndex === -1) return;
+  const [moved] = data.habits.splice(fromIndex, 1);
+
+  if (beforeHabitId === null) {
+    data.habits.push(moved);
+  } else {
+    const toIndex = data.habits.findIndex((h) => h.id === beforeHabitId);
+    data.habits.splice(toIndex === -1 ? data.habits.length : toIndex, 0, moved);
+  }
+  saveData(data);
 }
 
 
-// --- Rendu : vue du jour courant --------------------------------------------
+// --- Rendu : liste des habitudes --------------------------------------------
+//
+// Chaque habitude affiche UNE SEULE carte compacte regroupant : la case à
+// cocher du jour + série/gels, et juste en dessous une bande fine des 30
+// derniers jours. Avant, ces deux informations étaient dans deux sections
+// séparées (répétant le nom de chaque habitude deux fois) ; les fusionner
+// réduit nettement la hauteur totale, pour que plusieurs habitudes tiennent
+// sur un même écran de téléphone.
 //
 // Cette section lit l'état (via loadData) et génère le HTML correspondant.
 // Elle ne contient aucune règle métier : tout le calcul vient de
@@ -197,109 +293,106 @@ function freezeIcons(freezes) {
   return '🧊'.repeat(freezes) || '—';
 }
 
-// Formate une date "AAAA-MM-JJ" en texte lisible en français, ex :
-// "Lundi 6 octobre 2026". Utilisé comme titre de la zone du jour, à la
-// place du mot fixe "Aujourd'hui" (plus utile : on voit directement quel
-// jour est affiché).
-function formatDateHeading(dateStr) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-  const formatted = date.toLocaleDateString('fr-FR', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
-  // toLocaleDateString renvoie "lundi 6 octobre 2026" (sans majuscule) :
-  // on met la première lettre en majuscule pour un titre propre.
-  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
-}
+// Nombre de jours affichés dans la bande d'historique de chaque carte
+// (voir CLAUDE.md, section 2). Affichée sur 2 lignes pleine largeur de 30
+// cases chacune (voir .history-grid dans style.css).
+const HISTORY_DAYS = 60;
 
-// Reconstruit entièrement la zone du jour courant (titre = date du jour,
-// puis une carte par habitude avec case à cocher + série + gels). Appelée
-// au chargement de la page et chaque fois qu'une case est cochée/décochée.
-function renderToday() {
-  const data = loadData();
-  const today = todayStr();
-
-  document.getElementById('today-heading').textContent = formatDateHeading(today);
-
-  const container = document.getElementById('today-habits');
-  container.innerHTML = ''; // on repart de zéro à chaque rendu (pas de diff)
-
-  for (const habit of HABITS) {
-    const dates = data.habits[habit.id].doneDates;
-    const state = computeHabitState(dates, today);
-    const isDoneToday = dates.includes(today);
-
-    const card = document.createElement('div');
-    card.className = 'habit-card';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = isDoneToday;
-    // Au clic : on bascule l'état en mémoire/localStorage, puis on relance
-    // un rendu complet (today + historique), car cocher "aujourd'hui"
-    // change aussi la dernière case de la grille des 30 jours.
-    checkbox.addEventListener('change', () => {
-      toggleDoneToday(habit.id);
-      renderAll();
-    });
-
-    const info = document.createElement('div');
-    info.className = 'habit-info';
-    info.innerHTML = `
-      <div class="habit-label">${habit.label}</div>
-      <div class="habit-stats">Série : ${state.streak} jour(s) · Gels : ${freezeIcons(state.freezes)}</div>
-    `;
-
-    card.appendChild(checkbox);
-    card.appendChild(info);
-    container.appendChild(card);
-  }
-}
-
-
-// --- Rendu : vue des 30 derniers jours --------------------------------------
-
-// Renvoie la liste des 30 derniers jours (dont aujourd'hui), en ordre
-// chronologique croissant (du plus ancien au plus récent), au format
-// "AAAA-MM-JJ". Utilisé pour construire la grille d'historique.
-function last30Days(today) {
+// Renvoie la liste des HISTORY_DAYS derniers jours (dont aujourd'hui), en
+// ordre chronologique croissant (du plus ancien au plus récent), au format
+// "AAAA-MM-JJ". Utilisé pour construire la bande d'historique de chaque carte.
+function lastHistoryDays(today) {
   const days = [];
-  let cursor = addDays(today, -29); // -29 pour inclure aujourd'hui = 30 jours
-  for (let i = 0; i < 30; i++) {
+  let cursor = addDays(today, -(HISTORY_DAYS - 1)); // inclut aujourd'hui
+  for (let i = 0; i < HISTORY_DAYS; i++) {
     days.push(cursor);
     cursor = addDays(cursor, 1);
   }
   return days;
 }
 
-// Reconstruit entièrement la zone "30 derniers jours" : une grille de 30
-// cases par habitude, colorée selon le statut de chaque jour (fait / gelé /
-// manqué / pas encore suivi).
-function renderHistory() {
+// Reconstruit entièrement la liste des habitudes (une carte par habitude
+// NON archivée). Appelée au chargement de la page et chaque fois que les
+// données changent (coche, ajout, retrait, réordonnancement).
+function renderHabitList() {
   const data = loadData();
   const today = todayStr();
-  const days = last30Days(today);
-  const container = document.getElementById('history');
-  container.innerHTML = '';
+  const days = lastHistoryDays(today);
+  const container = document.getElementById('habit-list');
+  container.innerHTML = ''; // on repart de zéro à chaque rendu (pas de diff)
 
-  for (const habit of HABITS) {
-    const dates = data.habits[habit.id].doneDates;
-    const state = computeHabitState(dates, today);
+  const visibleHabits = data.habits.filter((h) => !h.archived);
 
-    const section = document.createElement('div');
-    section.className = 'history-habit';
+  visibleHabits.forEach((habit) => {
+    const state = computeHabitState(habit.doneDates, today);
+    const isDoneToday = habit.doneDates.includes(today);
 
-    const title = document.createElement('div');
-    title.className = 'history-title';
-    title.textContent = habit.label;
-    section.appendChild(title);
+    const card = document.createElement('div');
+    card.className = 'habit-card';
+    // Identifiant retenu sur l'élément DOM : utilisé par le glisser-déposer
+    // pour retrouver "quelle habitude ai-je déplacée" sans dépendre d'un
+    // index de position (voir reorderHabit).
+    card.dataset.habitId = habit.id;
 
+    // --- Ligne du haut : poignée, case à cocher, infos, bouton retirer ---
+    const top = document.createElement('div');
+    top.className = 'habit-card-top';
+
+    // Poignée de glisser-déposer : seule zone qui déclenche un
+    // réordonnancement, pour ne pas gêner les clics sur la case ou le
+    // texte. Voir la section "Glisser-déposer" plus bas pour la mécanique.
+    const handle = document.createElement('div');
+    handle.className = 'drag-handle';
+    handle.textContent = '⠿';
+    handle.addEventListener('pointerdown', (event) => startDrag(event, card, container));
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = isDoneToday;
+    // Au clic : on bascule l'état en mémoire/localStorage, puis on relance
+    // un rendu complet, car cocher "aujourd'hui" change aussi la dernière
+    // case de la bande d'historique (voir HISTORY_DAYS).
+    checkbox.addEventListener('change', () => {
+      toggleDoneToday(habit.id);
+      renderAll();
+    });
+
+    // 🏆 affiché seulement quand la série en cours égale le record : repère
+    // visuel immédiat "tu es sur ton meilleur score actuel".
+    const recordBadge = state.bestStreak > 0 && state.streak === state.bestStreak ? ' 🏆' : '';
+
+    const info = document.createElement('div');
+    info.className = 'habit-info';
+    info.innerHTML = `
+      <div class="habit-label">${habit.label}</div>
+      <div class="habit-stats">Série : ${state.streak} j · Record : ${state.bestStreak} j${recordBadge} · ${freezeIcons(state.freezes)}</div>
+    `;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-habit-btn';
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Retirer cette habitude';
+    // Demande confirmation : retirer une habitude la fait disparaître de
+    // l'app sans bouton de retour en arrière dans l'UI pour l'instant (son
+    // historique reste dans les exports, voir archiveHabit).
+    removeBtn.addEventListener('click', () => {
+      const ok = window.confirm(
+        `Retirer "${habit.label}" ? Elle disparaîtra de l'app, mais restera dans tes exports JSON/CSV.`
+      );
+      if (ok) {
+        archiveHabit(habit.id);
+        renderAll();
+      }
+    });
+
+    top.appendChild(handle);
+    top.appendChild(checkbox);
+    top.appendChild(info);
+    top.appendChild(removeBtn);
+
+    // --- Bande du bas : historique sur HISTORY_DAYS jours ---
     const grid = document.createElement('div');
     grid.className = 'history-grid';
-
     for (const day of days) {
       // 'empty' = jour antérieur à la première coche de cette habitude :
       // ce n'est pas un échec, l'habitude n'était simplement pas encore
@@ -311,9 +404,140 @@ function renderHistory() {
       grid.appendChild(cell);
     }
 
-    section.appendChild(grid);
-    container.appendChild(section);
+    card.appendChild(top);
+    card.appendChild(grid);
+    container.appendChild(card);
+  });
+
+  // Bouton d'ajout, toujours en dernière position de la liste.
+  const addButton = document.createElement('button');
+  addButton.className = 'add-habit-btn';
+  addButton.textContent = '+ Ajouter une habitude';
+  addButton.addEventListener('click', promptNewHabit);
+  container.appendChild(addButton);
+}
+
+// Demande le nom de la nouvelle habitude via une simple boîte de dialogue
+// native (window.prompt) : pas de formulaire personnalisé à construire,
+// fonctionne nativement au clavier sur mobile. Si l'utilisateur annule ou
+// laisse vide, on ne crée rien.
+function promptNewHabit() {
+  const label = window.prompt('Nom de la nouvelle habitude :');
+  if (!label || !label.trim()) return;
+  addHabit(label);
+  renderAll();
+}
+
+
+// --- Glisser-déposer pour réordonner les habitudes --------------------
+//
+// Utilise la Pointer Events API (unifie souris/tactile/stylet en une seule
+// API) : on attrape la carte via sa poignée (pointerdown), on la fait
+// suivre le doigt verticalement avec un simple décalage CSS (transform:
+// translateY), et dès qu'elle chevauche le milieu d'une carte voisine, on
+// les permute réellement dans le DOM pour un retour visuel immédiat. Au
+// relâchement, le nouvel ordre est écrit dans localStorage.
+//
+// `dragState` garde la carte en cours de déplacement ; les gestionnaires
+// globaux (onDragMove/onDragEnd) ne font rien si aucun glisser n'est en
+// cours (dragState === null).
+let dragState = null;
+
+function startDrag(pointerEvent, card, container) {
+  pointerEvent.preventDefault();
+  dragState = {
+    card,
+    container,
+    startY: pointerEvent.clientY,
+  };
+  card.classList.add('dragging');
+  // Capture le pointeur sur la poignée : garantit que les événements
+  // move/up continuent d'arriver même si le doigt glisse en dehors des
+  // limites de la poignée pendant le geste.
+  pointerEvent.target.setPointerCapture(pointerEvent.pointerId);
+}
+
+function onDragMove(event) {
+  if (!dragState) return;
+  const { card, container } = dragState;
+
+  card.style.transform = `translateY(${event.clientY - dragState.startY}px)`;
+
+  // Tant que la carte déplacée chevauche le milieu d'une voisine
+  // immédiate, on les permute dans le DOM. On compense le saut de position
+  // induit par la permutation (le point de référence `startY` est corrigé
+  // du même delta), pour que la carte reste visuellement collée au doigt
+  // au lieu de sauter au moment de l'échange.
+  let swapped = true;
+  while (swapped) {
+    swapped = false;
+    const draggedRect = card.getBoundingClientRect();
+    const draggedCenter = draggedRect.top + draggedRect.height / 2;
+    const siblings = [...container.children];
+    const index = siblings.indexOf(card);
+    const prev = siblings[index - 1];
+    const next = siblings[index + 1];
+
+    // Ne jamais permuter avec le bouton "+ Ajouter une habitude" : seules
+    // les cartes (.habit-card) participent au réordonnancement.
+    const prevIsCard = prev && prev.classList.contains('habit-card');
+    const nextIsCard = next && next.classList.contains('habit-card');
+
+    if (prevIsCard && draggedCenter < midY(prev)) {
+      const before = card.getBoundingClientRect();
+      container.insertBefore(card, prev);
+      compensateJump(before, card, event);
+      swapped = true;
+    } else if (nextIsCard && draggedCenter > midY(next)) {
+      const before = card.getBoundingClientRect();
+      container.insertBefore(card, next.nextSibling);
+      compensateJump(before, card, event);
+      swapped = true;
+    }
   }
+}
+
+// Point vertical médian d'un élément, en coordonnées écran.
+function midY(el) {
+  const rect = el.getBoundingClientRect();
+  return rect.top + rect.height / 2;
+}
+
+// Après avoir déplacé `card` dans le DOM, sa position de flux (sans le
+// transform) a changé. On ajuste dragState.startY du même écart pour que
+// le transform recalculé juste après garde la carte exactement là où elle
+// était visuellement juste avant la permutation (pas de saut à l'écran).
+function compensateJump(beforeRect, card, event) {
+  const afterRect = card.getBoundingClientRect();
+  dragState.startY += afterRect.top - beforeRect.top;
+  card.style.transform = `translateY(${event.clientY - dragState.startY}px)`;
+}
+
+function onDragEnd(event) {
+  if (!dragState) return;
+  const { card } = dragState;
+
+  card.classList.remove('dragging');
+  card.style.transform = '';
+
+  // La carte juste après celle qu'on vient de lâcher (s'il y en a une et
+  // que c'est bien une autre carte, pas le bouton "+ Ajouter") donne la
+  // nouvelle position : "déposée juste avant cette habitude-là". Si rien
+  // ne suit, c'est qu'elle a été déposée en toute fin de liste.
+  const next = card.nextElementSibling;
+  const beforeHabitId = next && next.classList.contains('habit-card') ? next.dataset.habitId : null;
+
+  dragState = null;
+  reorderHabit(card.dataset.habitId, beforeHabitId);
+  renderAll(); // re-rendu propre depuis les données (source de vérité)
+}
+
+// Gestionnaires globaux, branchés une seule fois : ils ne font rien tant
+// qu'aucun glisser n'est en cours (dragState === null).
+function initDragAndDrop() {
+  document.addEventListener('pointermove', onDragMove);
+  document.addEventListener('pointerup', onDragEnd);
+  document.addEventListener('pointercancel', onDragEnd);
 }
 
 
@@ -360,7 +584,7 @@ function renderExportReminder() {
 //   humain ou ouvert dans un tableur — ce n'est pas utilisé pour restaurer.
 //
 // Les deux exports mettent à jour `lastExportDate` : c'est ce qui permet au
-// rappel hebdomadaire (voir plus bas) de savoir depuis quand aucun export
+// rappel hebdomadaire (voir plus haut) de savoir depuis quand aucun export
 // n'a été fait.
 
 // Déclenche le téléchargement d'un fichier texte dans le navigateur, sans
@@ -381,8 +605,9 @@ function downloadFile(filename, content, mimeType) {
 
 // Construit le contenu CSV complet : une ligne par jour (du premier jour
 // suivi, toutes habitudes confondues, jusqu'à aujourd'hui), une colonne par
-// habitude. Fonction séparée de exportCsv() pour rester testable seule
-// dans la console, sans déclencher de téléchargement.
+// habitude (identifiée par son id, stable même si le libellé change plus
+// tard). Fonction séparée de exportCsv() pour rester testable seule dans
+// la console, sans déclencher de téléchargement.
 function buildCsv(data) {
   const today = todayStr();
 
@@ -391,10 +616,9 @@ function buildCsv(data) {
   // où démarrer les lignes du CSV.
   const states = {};
   let minDate = null;
-  for (const habit of HABITS) {
-    const dates = data.habits[habit.id].doneDates;
-    states[habit.id] = computeHabitState(dates, today);
-    for (const d of dates) {
+  for (const habit of data.habits) {
+    states[habit.id] = computeHabitState(habit.doneDates, today);
+    for (const d of habit.doneDates) {
       if (!minDate || d < minDate) minDate = d;
     }
   }
@@ -402,16 +626,15 @@ function buildCsv(data) {
   // Aucune donnée du tout dans l'app : on exporte juste l'en-tête.
   if (!minDate) minDate = today;
 
-  const header = ['date', ...HABITS.map((h) => h.id)];
+  const header = ['date', ...data.habits.map((h) => h.id)];
   const rows = [header];
 
   let cursor = minDate;
   while (cursor <= today) {
     const row = [cursor];
-    for (const habit of HABITS) {
+    for (const habit of data.habits) {
       // 'empty' = jour antérieur au début du suivi de CETTE habitude
-      // précise (les 3 habitudes peuvent avoir démarré à des dates
-      // différentes).
+      // précise (chaque habitude peut avoir démarré à une date différente).
       row.push(states[habit.id].statusByDate[cursor] || 'empty');
     }
     rows.push(row);
@@ -431,7 +654,7 @@ function exportJson() {
   const filename = `habit-tracker-${todayStr()}.json`;
   downloadFile(filename, JSON.stringify(data, null, 2), 'application/json');
 
-  renderAll(); // le bandeau de rappel (étape 7) doit disparaître si visible
+  renderAll(); // le bandeau de rappel doit disparaître si visible
 }
 
 // Exporte les données en CSV lisible, puis enregistre la date de cet export.
@@ -449,14 +672,13 @@ function exportCsv() {
 
 // --- Point d'entrée ----------------------------------------------------
 
-// Relance les deux rendus (jour courant + historique). Point d'entrée unique
-// utilisé au chargement de la page et après chaque action qui modifie les
-// données, pour garantir que l'écran reste toujours synchronisé avec
-// localStorage.
+// Relance les deux rendus (rappel d'export + liste des habitudes). Point
+// d'entrée unique utilisé au chargement de la page et après chaque action
+// qui modifie les données, pour garantir que l'écran reste toujours
+// synchronisé avec localStorage.
 function renderAll() {
   renderExportReminder();
-  renderToday();
-  renderHistory();
+  renderHabitList();
 }
 
 // Branche les boutons d'export une seule fois au démarrage (pas besoin de
@@ -471,6 +693,7 @@ function initExportButtons() {
 document.addEventListener('DOMContentLoaded', () => {
   renderAll();
   initExportButtons();
+  initDragAndDrop();
 });
 
 

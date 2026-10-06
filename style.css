@@ -3,47 +3,106 @@
    Thème sombre fixe (pas de bascule clair/sombre : l'app est pensée pour
    être utilisée sur téléphone, le sombre est plus confortable et économise
    la batterie sur écran OLED).
+
+   Chaque habitude = UNE carte compacte (.habit-card) qui regroupe la case
+   à cocher du jour ET la bande des 30 derniers jours, pour que plusieurs
+   habitudes tiennent sur un même écran sans scroller.
+
    Les classes "history-*" ci-dessous doivent rester synchronisées avec les
    statuts renvoyés par computeHabitState() dans app.js :
    'done' | 'frozen' | 'missed' (+ 'empty' généré côté rendu, pas par
    computeHabitState, pour un jour antérieur au début du suivi).
+   Code couleur : vert = fait, bleu = gelé, orange = pas fait, gris = pas
+   encore suivi ce jour-là.
    ========================================================================= */
 
-/* Mise en page générale : centrée, largeur type smartphone */
+/* Mise en page générale : centrée, largeur type smartphone, espacements
+   resserrés pour maximiser ce qui tient à l'écran. */
 body {
   font-family: system-ui, sans-serif;
   max-width: 480px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 12px;
   background: #121212;
   color: #e8e8e8;
 }
 
 h1 {
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   color: #f5f5f5;
 }
 
-/* --- Carte "jour courant" (une par habitude) --- */
+/* --- En-tête de l'app : logo + nom --- */
 
-.habit-card {
+.app-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+}
+
+.app-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px; /* adoucit les coins carrés de l'icône PNG */
+  flex-shrink: 0;
+}
+
+.app-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f5f5f5;
+}
+
+/* --- Carte d'habitude (case à cocher + bande des 30 jours) --- */
+
+.habit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
   background: #1e1e1e;
   border: 1px solid #333;
   border-radius: 8px;
+  touch-action: pan-y; /* laisse défiler la page verticalement partout sauf sur la poignée */
 }
 
-/* Case à cocher réduite (22px au lieu de 28px) pour laisser plus de place
-   au texte de l'habitude à côté. `accent-color` teinte la case cochée
-   pour qu'elle reste visible sur fond sombre (sans ça, certains
-   navigateurs affichent une case blanche peu lisible). */
+/* Carte actuellement en train d'être glissée : légèrement surélevée pour
+   bien montrer qu'elle "flotte" au-dessus des autres pendant le geste. */
+.habit-card.dragging {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+  position: relative;
+}
+
+.habit-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Poignée de glisser-déposer : `touch-action: none` est indispensable ici
+   (et seulement ici) pour que le navigateur nous laisse gérer le geste
+   nous-mêmes au lieu de faire défiler la page dès qu'on pose le doigt. */
+.drag-handle {
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  color: #777;
+  font-size: 1.1rem;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+/* Case à cocher réduite pour laisser plus de place au texte de l'habitude
+   à côté. `accent-color` teinte la case cochée pour qu'elle reste visible
+   sur fond sombre (sans ça, certains navigateurs affichent une case
+   blanche peu lisible). */
 .habit-card input[type="checkbox"] {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
   accent-color: #64b5f6;
 }
@@ -55,41 +114,55 @@ h1 {
 
 .habit-card .habit-label {
   font-weight: 600;
-  font-size: 1.05rem;
+  font-size: 0.95rem;
   color: #f5f5f5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .habit-card .habit-stats {
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   color: #aaa;
 }
 
-/* --- Grille "30 derniers jours" (une par habitude) --- */
-
-.history-habit {
-  margin-bottom: 16px;
+/* Bouton "retirer cette habitude" : discret (texte gris), pas un bouton
+   rouge agressif, puisqu'une confirmation est déjà demandée avant d'agir
+   (voir renderHabitList() dans app.js). */
+.remove-habit-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: #777;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: 4px;
 }
 
-.history-title {
-  font-weight: 600;
-  margin-bottom: 6px;
-  color: #f5f5f5;
+.remove-habit-btn:active {
+  background: #333;
+  color: #e8e8e8;
 }
 
-/* 10 colonnes x 3 lignes = 30 jours, carrés, responsive via 1fr */
+/* --- Bande des 30 derniers jours (en bas de chaque carte) --- */
+
+/* 30 colonnes x 2 lignes = 60 jours (HISTORY_DAYS dans app.js), en largeur
+   fluide (1fr) : le bloc s'étire sur toute la largeur de la carte. */
 .history-grid {
   display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  gap: 4px;
+  grid-template-columns: repeat(30, 1fr);
+  gap: 2px;
 }
 
 .history-cell {
   aspect-ratio: 1;
-  border-radius: 4px;
+  border-radius: 2px;
 }
 
-/* Couleurs par statut : vert = fait, bleu = gelé, rouge = manqué,
-   gris foncé = pas encore suivi ce jour-là (voir renderHistory() dans
+/* Couleurs par statut : vert = fait, bleu = gelé, orange = pas fait,
+   gris foncé = pas encore suivi ce jour-là (voir renderHabitList() dans
    app.js). Les teintes restent lisibles sur fond sombre. */
 .history-done {
   background: #4caf50;
@@ -100,7 +173,7 @@ h1 {
 }
 
 .history-missed {
-  background: #e57373;
+  background: #ff9800;
 }
 
 .history-empty {
@@ -117,6 +190,23 @@ h1 {
   padding: 10px 12px;
   margin-bottom: 14px;
   font-size: 0.9rem;
+}
+
+/* Bouton "+ Ajouter une habitude", en bas de la liste des cartes. */
+.add-habit-btn {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+  border: 1px dashed #444;
+  border-radius: 8px;
+  background: transparent;
+  color: #aaa;
+  cursor: pointer;
+}
+
+.add-habit-btn:active {
+  background: #1e1e1e;
 }
 
 /* --- Boutons d'export --- */
