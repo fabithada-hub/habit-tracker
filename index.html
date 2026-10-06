@@ -27,18 +27,32 @@
   </div>
 
   <!-- Liste des habitudes : une carte compacte par habitude (case à cocher
-       du jour + série/gels en haut, bande des 30 derniers jours en bas),
-       plus le bouton d'ajout. Remplie par renderHabitList() dans app.js. -->
+       du jour + série/gels en haut, bande d'historique en bas), plus le
+       bouton d'ajout. Remplie par renderHabitList() dans app.js. -->
   <div id="habit-list"></div>
 
-  <!-- Export des données. JSON = sauvegarde brute complète (pour
-       restaurer plus tard). CSV = lecture humaine / tableur. Les
-       gestionnaires de clic sont branchés dans app.js (initExportButtons). -->
-  <h1>Export</h1>
+  <!-- Habitudes archivées (retirées de la liste principale) : repliée par
+       défaut via <details>, natif HTML, pas besoin de JS pour le
+       plier/déplier. Contenu rempli par renderArchivedHabits() dans
+       app.js. -->
+  <details class="archived-section">
+    <summary>Habitudes archivées</summary>
+    <div id="archived-list"></div>
+  </details>
+
+  <!-- Export / import des données. JSON = sauvegarde brute complète (sert
+       aussi à l'import, pour restaurer). CSV = lecture humaine / tableur,
+       export seulement. Les gestionnaires de clic sont branchés dans
+       app.js (initExportButtons). -->
+  <h1>Export / Import</h1>
   <div class="export-actions">
     <button id="export-json-btn">Exporter en JSON</button>
     <button id="export-csv-btn">Exporter en CSV</button>
   </div>
+  <button id="import-json-btn" class="add-habit-btn">Importer un JSON</button>
+  <!-- Input file réel, cliqué par procuration par le bouton ci-dessus
+       (un <input type="file"> natif ne peut pas être stylé proprement). -->
+  <input type="file" id="import-json-input" accept="application/json" hidden>
 
   <!-- Tout le JS de l'app : modèle de données, règles des séries/gels,
        et le rendu des deux zones ci-dessus. Script classique (pas de

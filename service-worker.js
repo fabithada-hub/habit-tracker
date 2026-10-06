@@ -11,7 +11,7 @@
 // Nom du cache, versionné manuellement. Change ce numéro (v2, v3, ...)
 // à chaque fois que tu modifies un fichier listé dans APP_SHELL ci-dessous,
 // sinon les utilisateurs resteront bloqués sur l'ancienne version en cache.
-const CACHE_NAME = 'habit-tracker-v7';
+const CACHE_NAME = 'habit-tracker-v9';
 
 // Tous les fichiers nécessaires au fonctionnement complet de l'app hors-ligne.
 const APP_SHELL = [

@@ -40,40 +40,42 @@ function generateHabitId() {
   return `habit-${Date.now()}`;
 }
 
+// Remet en forme un objet de données quelconque vers le format actuel
+// attendu par l'app. Gère deux cas :
+// - ancien format où data.habits était un objet {id: {doneDates}} au lieu
+//   d'un tableau ordonné
+// - habitudes sans champ `archived` (créées avant l'ajout du retrait)
+// Factorisée à part de loadData() pour être réutilisée par l'import JSON
+// (importJsonFile) : un fichier importé doit subir exactement les mêmes
+// vérifications qu'une donnée relue depuis localStorage, qu'il vienne d'une
+// ancienne version de l'app ou d'un autre appareil.
+function normalizeData(data) {
+  if (data.habits && !Array.isArray(data.habits)) {
+    data.habits = DEFAULT_HABITS
+      .filter((h) => data.habits[h.id])
+      .map((h) => ({ id: h.id, label: h.label, doneDates: data.habits[h.id].doneDates, archived: false }));
+  }
+
+  if (!Array.isArray(data.habits)) data.habits = [];
+  for (const habit of data.habits) {
+    if (habit.archived === undefined) habit.archived = false;
+  }
+  if (data.lastExportDate === undefined) data.lastExportDate = null;
+
+  return data;
+}
+
 // Lit l'état complet depuis localStorage. Si rien n'existe encore, renvoie
-// une structure vide. Gère aussi la migration depuis l'ancien format (où
-// data.habits était un objet {id: {doneDates}} à la place d'un tableau
-// ordonné) : indispensable pour ne pas perdre les données déjà enregistrées
-// quand ce changement de modèle a été introduit.
+// une structure vide. Passe toujours les données par normalizeData() avant
+// de les renvoyer, et sauvegarde si une migration a changé quelque chose
+// (pour ne la refaire qu'une seule fois).
 function loadData() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return emptyData();
 
-  const data = JSON.parse(raw);
-
-  // Ancien format : data.habits est un objet, pas un tableau. On migre vers
-  // le nouveau format (tableau ordonné, avec label stocké sur chaque
-  // habitude) en réutilisant les libellés connus de DEFAULT_HABITS, puis on
-  // sauvegarde immédiatement pour ne migrer qu'une seule fois.
-  if (data.habits && !Array.isArray(data.habits)) {
-    const migrated = DEFAULT_HABITS
-      .filter((h) => data.habits[h.id])
-      .map((h) => ({ id: h.id, label: h.label, doneDates: data.habits[h.id].doneDates, archived: false }));
-    data.habits = migrated;
-    saveData(data);
-  }
-
-  // Habitudes créées avant l'ajout du retrait/archivage : pas encore de
-  // champ `archived`. On le complète à `false` (visible) par défaut, pour
-  // que toute la logique puisse supposer que ce champ existe toujours.
-  let needsSave = false;
-  for (const habit of data.habits) {
-    if (habit.archived === undefined) {
-      habit.archived = false;
-      needsSave = true;
-    }
-  }
-  if (needsSave) saveData(data);
+  const before = raw;
+  const data = normalizeData(JSON.parse(raw));
+  if (JSON.stringify(data) !== before) saveData(data);
 
   return data;
 }
@@ -215,19 +217,24 @@ function computeHabitState(doneDates, today) {
 
 // --- Actions sur les habitudes ---------------------------------------------
 
-// Coche ou décoche "aujourd'hui" pour une habitude donnée (bascule l'état).
-// Lit l'état, modifie le tableau de dates, réécrit immédiatement dans
-// localStorage, puis renvoie le nouvel état calculé (pratique pour tester
-// cette fonction seule dans la console, indépendamment du rendu).
-function toggleDoneToday(habitId) {
+// Coche ou décoche UNE DATE PRÉCISE pour une habitude donnée (bascule
+// l'état). Fonction générale utilisée aussi bien pour "aujourd'hui" (la
+// case à cocher) que pour un jour passé (clic sur une case de la bande
+// d'historique, voir renderHabitList). Lit l'état, modifie le tableau de
+// dates, réécrit immédiatement dans localStorage.
+function toggleDoneDate(habitId, dateStr) {
   const data = loadData();
-  const today = todayStr();
   const habit = data.habits.find((h) => h.id === habitId);
-  const idx = habit.doneDates.indexOf(today);
+  const idx = habit.doneDates.indexOf(dateStr);
   if (idx >= 0) habit.doneDates.splice(idx, 1); // déjà cochée -> on décoche
-  else habit.doneDates.push(today); // pas encore cochée -> on coche
+  else habit.doneDates.push(dateStr); // pas encore cochée -> on coche
   saveData(data);
-  return computeHabitState(habit.doneDates, today);
+}
+
+// Raccourci pour cocher/décocher "aujourd'hui" précisément (le cas le plus
+// fréquent, utilisé par la case à cocher principale de chaque carte).
+function toggleDoneToday(habitId) {
+  toggleDoneDate(habitId, todayStr());
 }
 
 // Ajoute une nouvelle habitude à la fin de la liste, avec un historique
@@ -249,6 +256,24 @@ function archiveHabit(habitId) {
   const data = loadData();
   const habit = data.habits.find((h) => h.id === habitId);
   if (habit) habit.archived = true;
+  saveData(data);
+}
+
+// Fait réapparaître une habitude archivée dans l'app (son historique
+// n'avait de toute façon jamais été supprimé, voir archiveHabit).
+function unarchiveHabit(habitId) {
+  const data = loadData();
+  const habit = data.habits.find((h) => h.id === habitId);
+  if (habit) habit.archived = false;
+  saveData(data);
+}
+
+// Renomme une habitude existante. Son historique (doneDates) et son id
+// technique ne changent pas : seul le libellé affiché change.
+function renameHabit(habitId, newLabel) {
+  const data = loadData();
+  const habit = data.habits.find((h) => h.id === habitId);
+  if (habit) habit.label = newLabel.trim();
   saveData(data);
 }
 
@@ -311,6 +336,12 @@ function lastHistoryDays(today) {
   return days;
 }
 
+// Mémorise l'habitude qu'on vient de cocher, pour lui appliquer une petite
+// animation au prochain rendu (voir plus bas et la classe .just-checked
+// dans style.css). Remis à null dès que l'animation a été appliquée une
+// fois, pour ne pas la rejouer à chaque rendu suivant.
+let justCheckedHabitId = null;
+
 // Reconstruit entièrement la liste des habitudes (une carte par habitude
 // NON archivée). Appelée au chargement de la page et chaque fois que les
 // données changent (coche, ajout, retrait, réordonnancement).
@@ -334,7 +365,14 @@ function renderHabitList() {
     // index de position (voir reorderHabit).
     card.dataset.habitId = habit.id;
 
-    // --- Ligne du haut : poignée, case à cocher, infos, bouton retirer ---
+    // Anime brièvement la carte qu'on vient de cocher (voir plus haut),
+    // une seule fois.
+    if (habit.id === justCheckedHabitId) {
+      card.classList.add('just-checked');
+      justCheckedHabitId = null;
+    }
+
+    // --- Ligne du haut : poignée, case à cocher, infos, boutons ---
     const top = document.createElement('div');
     top.className = 'habit-card-top';
 
@@ -351,9 +389,15 @@ function renderHabitList() {
     checkbox.checked = isDoneToday;
     // Au clic : on bascule l'état en mémoire/localStorage, puis on relance
     // un rendu complet, car cocher "aujourd'hui" change aussi la dernière
-    // case de la bande d'historique (voir HISTORY_DAYS).
+    // case de la bande d'historique (voir HISTORY_DAYS). Un petit retour
+    // vibreur + visuel accompagne uniquement la coche (pas le décochage) :
+    // c'est une confirmation positive, pas utile pour annuler.
     checkbox.addEventListener('change', () => {
       toggleDoneToday(habit.id);
+      if (checkbox.checked) {
+        justCheckedHabitId = habit.id;
+        if (navigator.vibrate) navigator.vibrate(15);
+      }
       renderAll();
     });
 
@@ -368,16 +412,28 @@ function renderHabitList() {
       <div class="habit-stats">Série : ${state.streak} j · Record : ${state.bestStreak} j${recordBadge} · ${freezeIcons(state.freezes)}</div>
     `;
 
+    const editBtn = document.createElement('button');
+    editBtn.className = 'edit-habit-btn';
+    editBtn.textContent = '✎';
+    editBtn.title = 'Renommer cette habitude';
+    editBtn.addEventListener('click', () => {
+      const newLabel = window.prompt('Nouveau nom :', habit.label);
+      if (newLabel && newLabel.trim() && newLabel.trim() !== habit.label) {
+        renameHabit(habit.id, newLabel);
+        renderAll();
+      }
+    });
+
     const removeBtn = document.createElement('button');
     removeBtn.className = 'remove-habit-btn';
     removeBtn.textContent = '✕';
     removeBtn.title = 'Retirer cette habitude';
-    // Demande confirmation : retirer une habitude la fait disparaître de
-    // l'app sans bouton de retour en arrière dans l'UI pour l'instant (son
-    // historique reste dans les exports, voir archiveHabit).
+    // Demande confirmation : retirer une habitude la fait disparaître de la
+    // liste principale (mais reste visible dans "Habitudes archivées", et
+    // dans les exports JSON/CSV — voir archiveHabit).
     removeBtn.addEventListener('click', () => {
       const ok = window.confirm(
-        `Retirer "${habit.label}" ? Elle disparaîtra de l'app, mais restera dans tes exports JSON/CSV.`
+        `Retirer "${habit.label}" ? Tu pourras la restaurer depuis "Habitudes archivées", et elle restera dans tes exports.`
       );
       if (ok) {
         archiveHabit(habit.id);
@@ -388,9 +444,15 @@ function renderHabitList() {
     top.appendChild(handle);
     top.appendChild(checkbox);
     top.appendChild(info);
+    top.appendChild(editBtn);
     top.appendChild(removeBtn);
 
     // --- Bande du bas : historique sur HISTORY_DAYS jours ---
+    // Chaque case est cliquable : ça permet de cocher/décocher un jour
+    // PASSÉ (pas seulement "aujourd'hui" via la case à cocher), par
+    // exemple pour rattraper un oubli de saisie. Comme la bande ne
+    // contient jamais de jour futur, aucune restriction de date n'est
+    // nécessaire ici.
     const grid = document.createElement('div');
     grid.className = 'history-grid';
     for (const day of days) {
@@ -401,6 +463,10 @@ function renderHabitList() {
       const cell = document.createElement('div');
       cell.className = `history-cell history-${status}`;
       cell.title = day; // info-bulle au survol : la date exacte
+      cell.addEventListener('click', () => {
+        toggleDoneDate(habit.id, day);
+        renderAll();
+      });
       grid.appendChild(cell);
     }
 
@@ -415,6 +481,47 @@ function renderHabitList() {
   addButton.textContent = '+ Ajouter une habitude';
   addButton.addEventListener('click', promptNewHabit);
   container.appendChild(addButton);
+}
+
+// Reconstruit la liste repliable des habitudes archivées (voir <details>
+// dans index.html), avec juste le nom et un bouton pour les restaurer :
+// pas besoin de case à cocher ni d'historique ici, puisqu'elles ne sont
+// plus suivies tant qu'elles restent archivées.
+function renderArchivedHabits() {
+  const data = loadData();
+  const container = document.getElementById('archived-list');
+  container.innerHTML = '';
+
+  const archived = data.habits.filter((h) => h.archived);
+
+  if (archived.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'archived-empty';
+    empty.textContent = 'Aucune habitude archivée.';
+    container.appendChild(empty);
+    return;
+  }
+
+  archived.forEach((habit) => {
+    const row = document.createElement('div');
+    row.className = 'archived-item';
+
+    const label = document.createElement('div');
+    label.className = 'archived-label';
+    label.textContent = habit.label;
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'restore-habit-btn';
+    restoreBtn.textContent = 'Restaurer';
+    restoreBtn.addEventListener('click', () => {
+      unarchiveHabit(habit.id);
+      renderAll();
+    });
+
+    row.appendChild(label);
+    row.appendChild(restoreBtn);
+    container.appendChild(row);
+  });
 }
 
 // Demande le nom de la nouvelle habitude via une simple boîte de dialogue
@@ -669,24 +776,69 @@ function exportCsv() {
   renderAll();
 }
 
+// Lit un fichier JSON choisi par l'utilisateur (voir initImportButton) et
+// REMPLACE entièrement les données actuelles par son contenu — après
+// confirmation, puisque c'est une action destructrice pour ce qu'il y a
+// déjà dans l'app. Utilisé pour restaurer un export (ex: nouveau
+// téléphone). Passe par normalizeData() comme loadData(), pour accepter
+// aussi bien un export récent qu'un export d'une version plus ancienne.
+function importJsonFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch (err) {
+      window.alert("Ce fichier n'est pas un JSON valide — import annulé.");
+      return;
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      window.alert("Ce fichier ne ressemble pas à un export de l'app — import annulé.");
+      return;
+    }
+
+    const ok = window.confirm(
+      'Importer ce fichier va REMPLACER toutes les données actuelles de l\'app (habitudes et historique). Continuer ?'
+    );
+    if (!ok) return;
+
+    saveData(normalizeData(parsed));
+    renderAll();
+    window.alert('Import terminé.');
+  };
+  reader.readAsText(file);
+}
+
 
 // --- Point d'entrée ----------------------------------------------------
 
-// Relance les deux rendus (rappel d'export + liste des habitudes). Point
-// d'entrée unique utilisé au chargement de la page et après chaque action
-// qui modifie les données, pour garantir que l'écran reste toujours
-// synchronisé avec localStorage.
+// Relance tous les rendus (rappel d'export + liste des habitudes +
+// habitudes archivées). Point d'entrée unique utilisé au chargement de la
+// page et après chaque action qui modifie les données, pour garantir que
+// l'écran reste toujours synchronisé avec localStorage.
 function renderAll() {
   renderExportReminder();
   renderHabitList();
+  renderArchivedHabits();
 }
 
-// Branche les boutons d'export une seule fois au démarrage (pas besoin de
-// les reconstruire à chaque rendu, contrairement aux cases à cocher qui
-// dépendent des données).
+// Branche les boutons d'export/import une seule fois au démarrage (pas
+// besoin de les reconstruire à chaque rendu, contrairement aux cartes
+// d'habitudes qui dépendent des données).
 function initExportButtons() {
   document.getElementById('export-json-btn').addEventListener('click', exportJson);
   document.getElementById('export-csv-btn').addEventListener('click', exportCsv);
+
+  // Le bouton visible déclenche un input file invisible (impossible de
+  // styler un vrai <input type="file"> proprement) : on relaie juste le
+  // clic, puis on lit le fichier choisi.
+  const importInput = document.getElementById('import-json-input');
+  document.getElementById('import-json-btn').addEventListener('click', () => importInput.click());
+  importInput.addEventListener('change', () => {
+    if (importInput.files[0]) importJsonFile(importInput.files[0]);
+    importInput.value = ''; // permet de réimporter le même fichier une 2e fois si besoin
+  });
 }
 
 // Premier affichage, une fois le HTML de la page chargé.
